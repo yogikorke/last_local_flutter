@@ -1,0 +1,690 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:godigi/models/user_details_model.dart';
+import 'package:godigi/pages/catalogs_list.dart';
+import 'package:godigi/utils/Utility.dart';
+import 'package:godigi/values/app_assets.dart';
+import 'package:godigi/values/app_colors.dart';
+import 'package:godigi/widget/list_shimmer.dart';
+import 'package:godigi/widget/video_tutorials_bottom_sheet.dart';
+import 'package:visibility_detector/visibility_detector.dart';
+import 'package:godigi/values/app_dimens.dart';
+import 'package:godigi/values/app_strings.dart';
+import 'package:godigi/models/orders_model.dart';
+import 'package:godigi/models/order_update_model.dart';
+import 'package:godigi/utils/api_manager.dart';
+import 'package:godigi/pages/order_details_page.dart';
+import 'package:godigi/pages/upgrade_popup_with_home_destination.dart';
+import 'package:godigi/widget/orders_list_Item.dart';
+import 'package:sembast/sembast.dart';
+import 'package:easy_localization/easy_localization.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:chips_choice/chips_choice.dart';
+import 'package:universal_platform/universal_platform.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class OrdersEnquiries extends StatefulWidget {
+  final bool isFromNotification;
+  final int orderFilterIndex;
+
+  OrdersEnquiries(this.isFromNotification, this.orderFilterIndex);
+
+  @override
+  _OrdersEnquiriesState createState() => _OrdersEnquiriesState();
+}
+
+class _OrdersEnquiriesState extends State<OrdersEnquiries> {
+  AppDimens appDimens;
+  MediaQueryData mediaQueryData;
+  Size size;
+  int page = 0;
+  final GlobalKey<RefreshIndicatorState> _refreshIndicatorKey =
+      new GlobalKey<RefreshIndicatorState>();
+  bool showLinearProgress = false;
+  bool stop = false;
+  List<OrderDetails> ordersList = [];
+  List<String> ordersIdList = [];
+  ScrollController scrollController;
+  Database database;
+  var ordersResponseStore = StoreRef<String, Map<String, dynamic>>.main();
+  bool isShownFirstTime = true;
+
+  // single choice value
+  int orderFilterIndex = 0;
+  bool isSearch = false;
+  TextEditingController searchController = TextEditingController();
+  UserDetailsModel userDetailsModel = UserDetailsModel();
+
+  // list of string options
+  List<String> orderFilterOptions = [
+    'all'.tr(),
+    'enquiry'.tr(),
+    'ordered'.tr(),
+    'inProgress'.tr(),
+    'shipped'.tr(),
+    'delivered'.tr(),
+    'completed'.tr(),
+    'cancelled'.tr(),
+    'returned'.tr(),
+    'other'.tr(),
+  ];
+
+  String orderStatusToFilter = "all";
+  bool loadMoreContent = false;
+  SharedPreferences sharedPreferences;
+
+  @override
+  void initState() {
+    super.initState();
+    initialize();
+    if (widget.orderFilterIndex != null) {
+      orderFilterIndex = widget.orderFilterIndex;
+    }
+    scrollController = new ScrollController();
+    scrollController.addListener(() {
+      if (scrollController.position.userScrollDirection ==
+          ScrollDirection.reverse) {
+        setState(() {
+          loadMoreContent = false;
+        });
+      } else {
+        if (scrollController.position.userScrollDirection ==
+            ScrollDirection.forward) {
+          setState(() {
+            loadMoreContent = true;
+          });
+        }
+      }
+    });
+    loadLocalDatabase();
+    trackScreen();
+  }
+
+  void initialize() async {
+    sharedPreferences = await SharedPreferences.getInstance();
+
+    if (sharedPreferences.getBool('DONT_SHOW_ORDERS_ENQUIRIES_TUT') == null) {
+      await sharedPreferences.setBool('DONT_SHOW_ORDERS_ENQUIRIES_TUT', false);
+      await sharedPreferences.setInt(
+          'RECOMMEND_SHOW_ORDERS_ENQUIRIES_TUT_LIFE', 2);
+    }
+    if (sharedPreferences.getBool('DONT_SHOW_ORDERS_ENQUIRIES_TUT') == false &&
+        sharedPreferences.getInt('RECOMMEND_SHOW_ORDERS_ENQUIRIES_TUT_LIFE') >
+            0) {
+      // VideoTutorialsBottomSheet(context).recommendVideo(
+      //     "manageOrdersTitle".tr(),
+      //     AppAssets.easily_manage_your_orders_from_anywhere_thumbnail,
+      //     "https://godigi-bucket.s3.ap-south-1.amazonaws.com/video-tutorials/easily-manage-your-orders-from-anywhere.mp4",
+      //     'DONT_SHOW_ORDERS_ENQUIRIES_TUT',
+      //     'RECOMMEND_SHOW_ORDERS_ENQUIRIES_TUT_LIFE');
+    }
+  }
+
+  void trackScreen() {
+    CatalogsList.firebaseAnalytics
+        .setCurrentScreen(screenName: "OrdersEnquiries");
+  }
+
+  refresh() {
+    setState(() {
+      scrollController =
+          new ScrollController(); // do not remove this line otherwise
+      // you will notice flickering issue after refresh and switching tabs
+      showLinearProgress = true;
+      page = 0;
+      ordersList.clear();
+      ordersIdList.clear();
+      stop = false;
+      isShownFirstTime = true;
+      loadLocalDatabase();
+    });
+  }
+
+  loadLocalDatabase() async {
+    setState(() {
+      showLinearProgress = true;
+    });
+
+    database = await Utility.getLocalDatabase();
+
+    dynamic jsonObject =
+        await ordersResponseStore.record('OrdersTab').get(database);
+    if (jsonObject != null) {
+      //debugPrint("jsonObject : $jsonObject");
+      OrdersModel localOrdersResponse = OrdersModel.fromJson(jsonObject);
+
+      if (localOrdersResponse != null) {
+        //debugPrint(
+        //    "localOrdersResponse success : ${localOrdersResponse.success}");
+        ordersList.clear();
+        ordersIdList.clear();
+        addFilteredItemsToList(localOrdersResponse.data.docs);
+      }
+    }
+    setState(() {
+      showLinearProgress = false;
+    });
+
+    getOrders();
+    getUserDetails();
+  }
+
+  getUserDetails() async {
+    if (await ApiManager.checkInternet()) {
+      if (mounted)
+        setState(() {
+          showLinearProgress = true;
+        });
+
+      userDetailsModel = UserDetailsModel.fromJson(
+        await ApiManager(context)
+            .getCall(AppStrings.USER, Map<String, dynamic>(), context),
+      );
+
+      if (mounted)
+        setState(() {
+          showLinearProgress = false;
+        });
+    } else {
+      Utility.showToast(msg: AppStrings.noInternet);
+    }
+  }
+
+  getOrders({searchKeyword}) async {
+    if (await ApiManager.checkInternet()) {
+      if (mounted)
+        setState(() {
+          showLinearProgress = true;
+        });
+      page = page + 1;
+      debugPrint("<<<>>> page : $page");
+      var request = Map<String, dynamic>();
+      request["page"] = page.toString();
+      //request["type"] = "order";
+      //request["status"] = "shipped";
+      //request["is_paid"] = "false";
+      request["orderBy"] = "desc";
+      request["sortBy"] = "createdAt";
+      if (searchKeyword != null && searchKeyword != "") {
+        request["search"] = searchKeyword;
+      }
+      request["limit"] = "100";
+      OrdersModel ordersResponse = OrdersModel.fromJson(
+        await ApiManager(context).getCall(
+          AppStrings.ORDER,
+          request,
+          context,
+        ),
+      );
+
+      if (ordersResponse != null) {
+        if (ordersResponse.success) {
+          if (ordersResponse.data.docs.length > 0) {
+            if (mounted) {
+              setState(() {
+                if (page == 1) {
+                  ordersResponseStore
+                      .record('OrdersTab')
+                      .put(database, ordersResponse.toJson());
+                  ordersList.clear();
+                  ordersIdList.clear();
+                }
+                addFilteredItemsToList(ordersResponse.data.docs);
+              });
+            }
+            //debugPrint(ordersList.length);
+          } else if (page == 1 && ordersResponse.data.docs.length == 0) {
+            ordersList.clear();
+            ordersIdList.clear();
+            for (var element in ordersResponse.data.docs) {
+              if (!ordersIdList.contains(element.sId)) {
+                ordersIdList.add(element.sId);
+                ordersList.add(element);
+              }
+            }
+            ordersResponseStore
+                .record('OrdersTab')
+                .put(database, ordersResponse.toJson());
+          } else {
+            noMoreData(page);
+          }
+          //debugPrint("ordersResponse.view : ${ordersResponse.view}");
+          // if view is true then show Orders else show Upgrade popup
+          if (ordersResponse.view == false && isShownFirstTime) {
+            isShownFirstTime = false;
+            showModalBottomSheet(
+                context: context,
+                backgroundColor: Colors.transparent,
+                isScrollControlled: false,
+                builder: (context) {
+                  return StatefulBuilder(
+                      builder: (BuildContext context, StateSetter setState) {
+                    return FractionallySizedBox(
+                      widthFactor:
+                          MediaQuery.of(context).size.width > 800 ? 0.5 : 1,
+                      child: UpgradePopupWithHomeDestination(),
+                    );
+                  });
+                });
+          }
+          // temporary code for testing upgrade popup
+          // showModalBottomSheet(
+          //     context: context,
+          //     backgroundColor: Colors.transparent,
+          //     isScrollControlled: false,
+          //     builder: (context) {
+          //       return StatefulBuilder(
+          //           builder: (BuildContext context, StateSetter setState) {
+          //         return FractionallySizedBox(
+          //           widthFactor: UniversalPlatform.isWeb ? 0.5 : 1,
+          //           child: UpgradePopupWithHomeDestination(),
+          //         );
+          //       });
+          //     });
+          // temporary code for testing upgrade popup
+        } else {
+          noMoreData(page);
+        }
+      } else {
+        noMoreData(page);
+      }
+      if (mounted)
+        setState(() {
+          showLinearProgress = false;
+        });
+    } else {
+      Utility.showToast(msg: AppStrings.noInternet);
+    }
+  }
+
+  noMoreData(int currentPage) {
+    if (mounted) {
+      setState(() {
+        page = currentPage - 1;
+        stop = true;
+      });
+    }
+  }
+
+  void addFilteredItemsToList(List<OrderDetails> unfilteredOrdersList) {
+    if (mounted)
+      setState(() {
+        if (orderFilterIndex == 0) {
+          orderStatusToFilter = "all";
+          for (var element in unfilteredOrdersList) {
+            if (!ordersIdList.contains(element.sId)) {
+              ordersIdList.add(element.sId);
+              ordersList.add(element);
+            }
+          }
+        } else if (orderFilterIndex == 1) {
+          orderStatusToFilter = "Enquiry";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "Enquiry" && !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        } else if (orderFilterIndex == 2) {
+          orderStatusToFilter = "Ordered";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "Ordered" && !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        } else if (orderFilterIndex == 3) {
+          orderStatusToFilter = "In Progress";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "In Progress" &&
+                !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        } else if (orderFilterIndex == 4) {
+          orderStatusToFilter = "Shipped";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "Shipped" && !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        } else if (orderFilterIndex == 5) {
+          orderStatusToFilter = "Delivered";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "Delivered" &&
+                !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        } else if (orderFilterIndex == 6) {
+          orderStatusToFilter = "Completed";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "Completed" &&
+                !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        } else if (orderFilterIndex == 7) {
+          orderStatusToFilter = "Cancelled";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "Cancelled" &&
+                !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        } else if (orderFilterIndex == 8) {
+          orderStatusToFilter = "Returned";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "Returned" && !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        } else if (orderFilterIndex == 9) {
+          orderStatusToFilter = "Other";
+          for (var item in unfilteredOrdersList) {
+            if (item.status == "Other" && !ordersIdList.contains(item.sId)) {
+              ordersIdList.add(item.sId);
+              ordersList.add(item);
+            }
+          }
+        }
+      });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    mediaQueryData = MediaQuery.of(context);
+    size = mediaQueryData.size;
+    appDimens = new AppDimens(size);
+
+    return WillPopScope(
+      onWillPop: () {
+        bool shouldPop = false;
+        if (isSearch) {
+          setState(() {
+            isSearch = false;
+          });
+        } else if (widget.isFromNotification) {
+          Navigator.of(context).pushAndRemoveUntil(
+              PageRouteBuilder(
+                pageBuilder: (context, animation1, animation2) =>
+                    CatalogsList(),
+                transitionDuration: Duration(seconds: 0),
+              ),
+              (Route<dynamic> route) => false);
+        } else {
+          shouldPop = true;
+        }
+        return Future.value(shouldPop);
+      },
+      child: Center(
+        child: Container(
+          width:
+              MediaQuery.of(context).size.width > 800 && UniversalPlatform.isWeb
+                  ? MediaQuery.of(context).size.width / 2
+                  : MediaQuery.of(context).size.width,
+          child: Scaffold(
+            backgroundColor: Color(0xffF7F6F3),
+            appBar: AppBar(
+              elevation: 0,
+              shadowColor: Color(0xff28374E),
+              iconTheme: IconThemeData(color: Colors.white),
+              backgroundColor: Color(0xff28374E),
+              title: isSearch
+                  ? TextField(
+                      cursorColor: Colors.white,
+                      controller: searchController,
+                      autofocus: true,
+                      maxLines: 1,
+                      enabled: isSearch,
+                      decoration: InputDecoration(
+                        hintText: "enterKeyword".tr(),
+                        hintStyle: GoogleFonts.roboto(
+                          fontWeight: FontWeight.w400,
+                          fontSize: 18,
+                          color: Colors.white,
+                        ),
+                        focusColor: Colors.white,
+                        disabledBorder: InputBorder.none,
+                        focusedBorder: UnderlineInputBorder(
+                          borderSide:
+                              BorderSide(color: AppColors.greenColor, width: 1),
+                        ),
+                      ),
+                      style: GoogleFonts.roboto(
+                        fontWeight: FontWeight.w400,
+                        fontSize: 18,
+                        color: Colors.white,
+                      ),
+                    )
+                  : Text(
+                      "manageOrdersEnquiries".tr().toUpperCase(),
+                      style: GoogleFonts.roboto(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 18,
+                      ),
+                    ),
+              actions: [
+                Visibility(
+                  visible: false,
+                  child: IconButton(
+                    iconSize: 24,
+                    icon: isSearch ? Icon(Icons.check) : Icon(Icons.search),
+                    color: Colors.white,
+                    onPressed: () {
+                      if (!isSearch) {
+                        if (mounted) {
+                          setState(() {
+                            isSearch = true;
+                          });
+                        }
+                      } else {
+                        if (searchController.text.isEmpty) {
+                          Utility.showToast(
+                              msg: "Please enter some keyword to search");
+                        } else {
+                          getOrders(
+                              searchKeyword: searchController.text.trim());
+                        }
+                      }
+                    },
+                  ),
+                ),
+                IconButton(
+                  icon: Icon(
+                    Icons.smart_display,
+                    color: Colors.white,
+                  ),
+                  onPressed: () {
+                    // VideoTutorialsBottomSheet(context).showSingleVideoPlaylist(
+                    //     "manageOrdersTitle".tr(),
+                    //     AppAssets
+                    //         .easily_manage_your_orders_from_anywhere_thumbnail,
+                    //     "https://godigi-bucket.s3.ap-south-1.amazonaws.com/video-tutorials/easily-manage-your-orders-from-anywhere.mp4");
+                  },
+                )
+              ],
+              centerTitle: false,
+              bottom: PreferredSize(
+                child: showLinearProgress
+                    ? Container(
+                        child: Utility.showLinearProgress(context,
+                            scaleWidth: true))
+                    : Container(),
+                preferredSize: Size.fromHeight(4.0),
+              ),
+              leading: BackButton(
+                color: Colors.white,
+                onPressed: () {
+                  if (isSearch) {
+                    setState(() {
+                      isSearch = false;
+                    });
+                  } else if (widget.isFromNotification) {
+                    Navigator.of(context).pushAndRemoveUntil(
+                        PageRouteBuilder(
+                          pageBuilder: (context, animation1, animation2) =>
+                              CatalogsList(),
+                          transitionDuration: Duration(seconds: 0),
+                        ),
+                        (Route<dynamic> route) => false);
+                  } else {
+                    Navigator.pop(context);
+                  }
+                },
+              ),
+            ),
+            body: Container(
+              child: Column(
+                children: <Widget>[
+                  ChipsChoice<int>.single(
+                    value: orderFilterIndex,
+                    choiceStyle: C2ChoiceStyle(
+                      showCheckmark: false,
+                      color: Colors.grey.shade600,
+                      brightness: Brightness.light,
+                      labelStyle: GoogleFonts.roboto(
+                          color: Color(0xff898989),
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500),
+                    ),
+                    choiceActiveStyle: C2ChoiceStyle(
+                      showCheckmark: false,
+                      brightness: Brightness.dark,
+                      color: Colors.grey[300],
+                      labelStyle: GoogleFonts.roboto(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.black,
+                      ),
+                    ),
+                    onChanged: (value) {
+                      orderFilterIndex = value;
+                      refresh();
+                    },
+                    choiceItems: C2Choice.listFrom<int, String>(
+                      source: orderFilterOptions,
+                      value: (i, v) => i,
+                      label: (i, v) => v,
+                      tooltip: (i, v) => v,
+                    ),
+                  ),
+                  Expanded(
+                    child: Stack(
+                      children: <Widget>[
+                        RefreshIndicator(
+                          key: _refreshIndicatorKey,
+                          onRefresh: () async {
+                            refresh();
+                          },
+                          child: showLinearProgress
+                              ? ListShimmer()
+                              : !showLinearProgress && ordersList.length == 0
+                                  ? ListView(
+                                      physics:
+                                          const AlwaysScrollableScrollPhysics(),
+                                      children: <Widget>[
+                                        Container(
+                                          width:
+                                              MediaQuery.of(context).size.width,
+                                          height: MediaQuery.of(context)
+                                                  .size
+                                                  .height -
+                                              ((AppBar().preferredSize.height *
+                                                      2) +
+                                                  30),
+                                          child: Utility.emptyView(
+                                              "noOrders".tr()),
+                                        ),
+                                      ],
+                                    )
+                                  : ListView.builder(
+                                      controller: scrollController,
+                                      physics:
+                                          const AlwaysScrollableScrollPhysics(),
+                                      padding: EdgeInsets.only(
+                                        left: appDimens.paddingw12,
+                                        top: 8,
+                                        right: appDimens.paddingw12,
+                                      ),
+                                      itemCount: ordersList.length,
+                                      itemBuilder:
+                                          (BuildContext context, int index) {
+                                        // debugPrint("<<<>>> ordersList.length : ${ordersList.length}");
+                                        // debugPrint("<<<>>> index : $index");
+                                        return index == (ordersList.length - 1)
+                                            ? VisibilityDetector(
+                                                key: Key(index.toString()),
+                                                child:
+                                                    ordersListItemview(index),
+                                                onVisibilityChanged:
+                                                    (visibilityInfo) {
+                                                  if (!stop &&
+                                                      loadMoreContent) {
+                                                    getOrders();
+                                                  }
+                                                },
+                                              )
+                                            : ordersListItemview(index);
+                                      },
+                                    ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  ordersListItemview(int index) {
+    return OrdersListItem(
+      orderDetails: ordersList[index],
+      onTap: () async {
+        if (!ordersList[index].isRead) editOrderApiCall(ordersList[index]);
+        Navigator.push(
+          context,
+          PageRouteBuilder(
+            pageBuilder: (context, animation1, animation2) => OrderDetailsPage(
+              orderStatus: OrderStatus.PENDING,
+              orderDetails: ordersList[index],
+              userDetailsModel: userDetailsModel,
+            ),
+            transitionDuration: Duration(seconds: 0),
+          ),
+        ).then((value) => refresh());
+      },
+    );
+  }
+
+  editOrderApiCall(OrderDetails orderDetail) async {
+    if (await ApiManager.checkInternet()) {
+      var request = Map<String, dynamic>();
+      request["is_read"] = "true";
+
+      OrderUpdateModel response = OrderUpdateModel.fromJson(
+        await ApiManager(context).postCall(
+          AppStrings.ORDER + "/" + orderDetail.sId + "/update",
+          request,
+          context,
+        ),
+      );
+
+      if (response.success) {
+        refresh();
+      }
+    } else {
+      Utility.showToast(msg: AppStrings.noInternet);
+    }
+  }
+}

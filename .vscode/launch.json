@@ -1,0 +1,61 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Android on Redmi Note 9 Pro Max",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "console": "debugConsole",
+            "flutterMode": "debug",
+            "args": ["-d", "Redmi Note 9 Pro Max"]
+        },
+        {
+            "name": "iOS on iPhone 7",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "console": "debugConsole",
+            "flutterMode": "debug",
+            "args": ["-d", "iPhone"]
+        },
+        {
+            "name": "Web on Chrome",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "console": "debugConsole",
+            "flutterMode": "debug",
+            "args": [
+                "-d",
+                "Chrome",
+                "--web-renderer",
+                "canvaskit"
+            ]
+        },
+        {
+            "name": "Web on Edge",
+            "type": "dart",
+            "request": "launch",
+            "program": "lib/main.dart",
+            "console": "debugConsole",
+            "flutterMode": "debug",
+            "args": [
+                "-d",
+                "Edge",
+                "--web-renderer",
+                "canvaskit"
+            ]
+        },
+        {
+            "name": "Integration Tests",
+            "type": "dart",
+            "request": "launch",
+            "console": "debugConsole",
+            "preLaunchTask": "IntegrationTests",
+        }
+    ]
+}
